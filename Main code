@@ -1,0 +1,137 @@
+// Here is the main code of the device 
+
+
+#include <Arduino.h>        // Core Arduino library for basic types and functions (setup(), loop(), Serial, etc.)
+#include <HX711.h>          // Library for interfacing with the HX711 load cell amplifier (used to read weight sensors)
+#include <WiFi.h>           // ESP32 WiFi library (handles WiFi connection and status)
+#include <esp_wpa2.h>       // WPA2-Enterprise support for ESP32 (needed for networks like eduroam)
+#include <PubSubClient.h>   // MQTT client library (PubSubClient) for publish/subscribe messaging
+
+float masse;               // Global variable to store the mass value to publish
+float reading;             // Global variable to hold raw reading from the HX711 before any processing
+
+// HX711 circuit wiring
+const int LOADCELL_DOUT_PIN = 19;  // Data output pin from the HX711 (connect to ESP32 GPIO 19)
+const int LOADCELL_SCK_PIN = 21;   // Clock pin for the HX711 (connect to ESP32 GPIO 21)
+const int Calibration_Weight = 50; // Known calibration weight (units : grams) used during calibration routine
+HX711 scale;                       // Create an instance of the HX711 class to interact with the load cell amplifier
+
+// SSID of the WiFi network to connect to
+const char* ssid = "eduroam";      // Network name (Eduroam uses WPA2-Enterprise)
+
+#define CONNECTION_TIMEOUT 10      // Constant for timeout handling (currently declared but not used in code)
+int timeout_counter = 0;           // Counter variable intended for timeout logic (currently unused)
+
+// MQTT Broker parameters (fill or update as needed)
+//const char *mqtt_broker = "broker.hivemq.com";  // Example public broker (commented out)
+const char *mqtt_broker = "172.23.136.18";       // IP address of the MQTT broker to connect to
+const char *topic = "IUT/balance";               // MQTT topic where weight data will be published
+const char *mqtt_username = "";                  // MQTT username (empty, it's not needed to secure this)
+const char *mqtt_password = "";                  // MQTT password (empty, it's not needed to secure this)
+const int mqtt_port = 1883;                      // MQTT port: 1883 for plain MQTT, 8883 for MQTT over TLS
+
+WiFiClient espClient;            // Create a WiFi client instance used by the MQTT client
+PubSubClient client(espClient);  // Create the MQTT client and attach the WiFi client to it
+
+// WPA2-Enterprise credentials / identifiers for eduroam-style auth
+#define EAP_IDENTITY "prenom.nom@etu.univ-amu.fr" // Identity used by WPA2 Enterprise (PEAP) - often same as username
+#define EAP_PASSWORD ""                                // Eduroam password (left empty here; must be filled to connect)
+#define EAP_USERNAME "prenom.nom@etu.univ-amu.fr"  // Username for the enterprise auth (often same as identity)
+
+// MQTT message reception callback
+// This function is called by the PubSubClient library each time a message arrives on a subscribed topic.
+void callback(char *topic, byte *payload, unsigned int length) {
+  Serial.print("Le message a été envoyé sur le topic : "); // Prints the topic where the message was published
+  Serial.println(topic);                                  // Print the topic string
+  Serial.print("Message:");                               // Label for the incoming message
+  for (int i = 0; i < length; i++) {                      // Iterate over the message payload byte-by-byte
+    Serial.print((char) payload[i]);                      // Cast each byte to char and print
+  }
+  Serial.println();                                       // Newline after the message content
+  Serial.println("-----------------------");              // Visual separator for readability on Serial Monitor
+}
+
+// Setup function: runs once at boot
+void setup() {
+  Serial.begin(115200);                                   // Initialize serial communication at 115200 baud for debugging
+  scale.begin(LOADCELL_DOUT_PIN, LOADCELL_SCK_PIN);      // Initialize HX711 with the defined data and clock pins
+  scale.set_scale();                                      // Set the scale parameter (no numeric scale provided yet)
+  scale.tare();                                           // Tare the scale (zero it) to ignore current load
+
+  Serial.println("-----------------------------------------"); // Visual separator
+  Serial.println("Calibration");                          // Inform user calibration is starting
+  Serial.println("Put a known weight on the scale");      // Prompt: place the calibration weight on the scale now
+
+  // WiFi connection: first disconnect any previous config, then start a new connection using WPA2 Enterprise
+  WiFi.disconnect(true);                                  // Clear previous WiFi configuration to ensure a clean start
+  // Begin connection using WPA2 Enterprise (PEAP). Parameters:
+  // ssid: network name
+  // WPA2_AUTH_PEAP: authentication method constant (PEAP)
+  // EAP_IDENTITY: identity string 
+  // EAP_USERNAME: username
+  // EAP_PASSWORD: password for enterprise auth
+  WiFi.begin(ssid, WPA2_AUTH_PEAP, EAP_IDENTITY, EAP_USERNAME, EAP_PASSWORD);
+
+  // Wait for WiFi to connect. This loop blocks until the connection is established.
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);                                           // Wait half a second between dots
+    Serial.print(F("."));                                 // Print a dot to show progress (F() stores string in flash to save RAM)
+  }
+  Serial.println("");                                     // Newline after the dots
+  Serial.println(F("L'ESP32 est connecté au WiFi !"));   // Inform that the ESP32 connected to WiFi (string is in French)
+
+  // MQTT setup: set server and callback, then attempt to connect
+  client.setServer(mqtt_broker, mqtt_port);               // Configure the MQTT broker address and port
+  client.setCallback(callback);                           // Set the function to be called when a message is received
+
+  // Loop until the MQTT client is connected. Uses the ESP MAC to create a unique client ID.
+  while (!client.connected()) {
+    String client_id = "esp32-client-";                   // Base client ID string
+    client_id += String(WiFi.macAddress());               // Append device MAC address to ensure uniqueness
+    Serial.printf("La chaîne de mesure %s se connecte au broker MQTT", client_id.c_str()); // Inform about connection attempt
+
+    // Attempt to connect to the MQTT broker. If no username/password are provided, it connects anonymously.
+    if (client.connect(client_id.c_str(), mqtt_username, mqtt_password)) {
+      Serial.println("La chaîne de mesure est connectée au broker."); // Successful connection message
+    } else {
+      // On failed connection, print error state for debugging (client.state() gives MQTT connection status code)
+      Serial.print("La chaîne de mesure n'a pas réussi à se connecter ... ");
+      Serial.print(client.state());
+    }
+  }
+
+  // Calibration routine: wait a little, read a measured value with the known calibration weight,
+  // compute scale factor and set it so future readings are scaled to real-world units.
+  delay(5000);                                            // Wait 5 seconds to give user time to place the calibration weight
+  float x = scale.get_units(10);                          // Read averaged units from HX711 over 10 samples
+  x = x / Calibration_Weight;                             // Derive the scale factor by dividing measured units by known weight
+  scale.set_scale(x);                                     // Apply the calculated scale factor to the HX711 instance
+  Serial.println("Calibration finished...");              // Notify that calibration is complete
+  delay(1000);                                            // Short delay before entering the main loop
+}
+
+// Main loop: runs repeatedly after setup()
+void loop() {
+
+  if (scale.is_ready()) {                                 // Check that the HX711 is ready to be read
+    reading = scale.get_units(10);                        // Obtain averaged reading (10 samples) from the HX711
+    Serial.print("HX711 reading: ");                      // Debug label for raw HX711 reading
+    Serial.println(reading);                              // Print the raw reading value to Serial Monitor
+  }
+
+  masse = reading;                                        // Store the most recent reading into 'masse' variable
+
+  // Publish the mass value to the configured MQTT topic.
+  // String(masse).c_str() converts the float to a temporary String, then to a C-string for the publish() call.
+  client.publish(topic, String(masse).c_str());
+
+  // Subscribe to the same topic. Note: repeatedly subscribing in loop() is redundant but harmless;
+  // typically subscribe() would be called once after connecting to the broker.
+  client.subscribe(topic);
+
+  // Call the MQTT client's loop handler to process incoming messages and maintain the connection.
+  client.loop();
+
+  delay(500);                                             // Delay 500 ms between iterations (comment previously stated 5 seconds, but code uses 500 ms)
+}
+
