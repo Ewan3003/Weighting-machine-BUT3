@@ -1,6 +1,6 @@
  Weighting-machine-BUT3-TI-B
 
- We built a weighting machine in a group project : Rémi & Ewan 
+ We built a weighting machine in a group project.
 
 The device consists of an aluminium rod with a very specific geometry. Strain gauges are completely sticked on the aluminium rod, these sensors are changing resistors according to the constraint applyed on the edge of the rod. This is why one part of the rod is screwed on the solid basis of the complete device. A metrology work has been done to determine the uncertainty of the measurements in different metrolgy cases scenarios.
 
