@@ -1,6 +1,8 @@
  ## Weighting machine
 
- I built a weighting machine from scratch.
+ I built a weighting machine from scratch : 
+
+<img width="1984" height="1186" alt="BA4241ED-91E1-4A0F-97D7-63CC95D81753" src="https://github.com/user-attachments/assets/2f08357f-5fc5-42c0-919b-7b6ab4bd4488" />
 
 The device consists of an aluminium rod with a very specific geometry. Strain gauges are completely sticked on the aluminium rod, these sensors are changing resistors according to the constraint applyed on the edge of the rod. This is why one part of the rod is screwed on the solid basis of the complete device. I had to come up with a mechanical protocol first in ordre to understand how the aluminium rod would react to the weight constraints : 
 
