@@ -1,4 +1,4 @@
- ##weighting machine
+ ## Weighting machine
 
  I built a weighting machine from scratch.
 
